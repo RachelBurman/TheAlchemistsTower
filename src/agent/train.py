@@ -81,11 +81,14 @@ def train(
         target_update_freq=200,
     )
 
-    stage       = 0
-    env         = make_env(stage, max_steps)
-    recent_r    = deque(maxlen=50)
-    best_mean_r = -float("inf")
-    total_steps = 0
+    stage        = 0
+    env          = make_env(stage, max_steps)
+    recent_r     = deque(maxlen=50)
+    best_mean_r  = -float("inf")
+    total_steps  = 0
+    ep_rewards:   list[float] = []
+    mean_rewards: list[float] = []
+    stage_changes: list[tuple[int, int]] = []
 
     print(f"Device: {agent.device}")
     print(f"Starting curriculum stage 0: {CURRICULUM[0][:3]}")
@@ -120,6 +123,8 @@ def train(
         agent.decay_epsilon()
         recent_r.append(ep_reward)
         mean_r = float(np.mean(recent_r))
+        ep_rewards.append(ep_reward)
+        mean_rewards.append(mean_r)
 
         # Save best model
         if mean_r > best_mean_r and len(recent_r) >= 10:
@@ -131,6 +136,7 @@ def train(
         if mean_r >= threshold and stage < len(CURRICULUM) - 1:
             stage += 1
             env   = make_env(stage, max_steps)
+            stage_changes.append((ep, stage))
             print(f"\n>>> CURRICULUM ADVANCE to stage {stage}: {CURRICULUM[stage][:3]}\n")
 
         # Periodic logging
@@ -145,10 +151,54 @@ def train(
                 f"{len(agent.buffer):>6}"
             )
 
+    history = {
+        "episode_rewards": ep_rewards,
+        "mean_rewards":    mean_rewards,
+        "stages":          stage_changes,
+    }
+    np.save(os.path.join(save_dir, "history.npy"), history)
+
     print("\nTraining complete.")
     print(f"Best mean reward: {best_mean_r:.1f}")
     print(f"Model saved to:   {save_dir}/best.pt")
-    return agent
+    return agent, history
+
+
+def plot_training(save_dir: str = "checkpoints") -> None:
+    """Load saved history and plot the reward curve."""
+    import matplotlib.pyplot as plt
+
+    history = np.load(
+        os.path.join(save_dir, "history.npy"), allow_pickle=True
+    ).item()
+
+    ep_rewards   = history["episode_rewards"]
+    mean_rewards = history["mean_rewards"]
+    stages       = history["stages"]
+    episodes     = list(range(1, len(ep_rewards) + 1))
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+
+    # Raw episode reward (faint) + rolling mean (bold)
+    ax.plot(episodes, ep_rewards,   alpha=0.25, color="steelblue", label="Episode reward")
+    ax.plot(episodes, mean_rewards, color="steelblue", linewidth=2, label="Mean reward (50 ep)")
+
+    # Mark curriculum stage advances
+    for ep, stage in stages:
+        ax.axvline(ep, color="orange", linestyle="--", linewidth=1)
+        ax.text(ep + 5, ax.get_ylim()[1] * 0.9, f"Stage {stage}", color="orange", fontsize=8)
+
+    ax.axhline(0, color="gray", linestyle=":", linewidth=0.8)
+    ax.set_xlabel("Episode")
+    ax.set_ylabel("Total Reward")
+    ax.set_title("Alchemist's Tower — DQN Training Curve")
+    ax.legend()
+    plt.tight_layout()
+
+    out = os.path.join(save_dir, "training_curve.png")
+    plt.savefig(out, dpi=150)
+    print(f"Plot saved to {out}")
+    plt.show()
 
 
 if __name__ == "__main__":
