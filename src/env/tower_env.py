@@ -87,7 +87,7 @@ RECIPE_LIST: list[tuple[Ingredient, Ingredient, Potion]] = [
 #   gradient descent — large values dominate early gradients.
 # -----------------------------------------------------------------------
 
-OBS_SIZE = 40
+OBS_SIZE = 45  # +5: current room visit count + 4 neighbour visit counts
 
 
 class TowerEnv(gym.Env):
@@ -482,6 +482,16 @@ class TowerEnv(gym.Env):
         # Inventory potion counts (normalised by 3)
         for pot in Potion:
             obs[33 + pot - 1] = min(self._inv_pot[pot], 3) / 3.0
+
+        # Visit counts — current room + 4 neighbours (normalised by 10)
+        # This is the key input that lets the agent learn to avoid revisiting.
+        # Without it, visit_count affects rewards during training but the
+        # agent has no observation to condition its policy on, so it can't
+        # learn "I've been here — go somewhere else."
+        obs[40] = min(room.visit_count, 10) / 10.0
+        for i, d in enumerate(DIRECTIONS):
+            nb = self._floor.neighbor(x, y, d)
+            obs[41 + i] = min(nb.visit_count if nb else 0, 10) / 10.0
 
         return obs
 
