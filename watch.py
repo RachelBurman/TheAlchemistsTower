@@ -55,8 +55,27 @@ def top_q_values(agent: DQNAgent, obs: np.ndarray, mask: np.ndarray, n: int = 3)
     return "  |  ".join(parts)
 
 
-def clear():
-    os.system("cls" if os.name == "nt" else "clear")
+# Enable ANSI escape codes on Windows (no-op on other platforms)
+os.system("")
+
+def _overwrite(lines: list[str], prev_line_count: int) -> int:
+    """
+    Overwrite the previous frame in place using ANSI cursor movement.
+
+    Instead of clearing the whole screen (which causes a white flash),
+    we move the cursor up by however many lines we printed last frame,
+    then reprint. The terminal updates each character in place — no blank
+    intermediate state, no flash.
+
+    \033[{n}A  — move cursor up n lines
+    \033[J     — erase from cursor to end of screen
+    """
+    if prev_line_count > 0:
+        sys.stdout.write(f"\033[{prev_line_count}A\033[J")
+    text = "\n".join(lines)
+    sys.stdout.write(text + "\n")
+    sys.stdout.flush()
+    return text.count("\n") + 1  # return line count for next call
 
 
 def watch(seed: int, delay: float, greedy: bool, checkpoint: str):
@@ -73,7 +92,8 @@ def watch(seed: int, delay: float, greedy: bool, checkpoint: str):
     obs, _       = env.reset(seed=seed)
     total_reward = 0.0
     step         = 0
-    history      = []   # (action_name, reward) per step
+    history      = []
+    prev_lines   = 0
 
     print(f"Loaded: {checkpoint}  |  Seed: {seed}  |  Greedy: {greedy}")
     print("Press Ctrl+C to stop early.\n")
@@ -91,46 +111,47 @@ def watch(seed: int, delay: float, greedy: bool, checkpoint: str):
             step         += 1
             history.append((name, reward))
 
-            clear()
-            print("=" * 56)
-            print(f"  THE ALCHEMIST'S TOWER  —  seed {seed}")
-            print("=" * 56)
-            print(env.render())
-            print()
-
-            # Last few actions
-            print("Recent actions:")
+            frame = [
+                "=" * 56,
+                f"  THE ALCHEMIST'S TOWER  --  seed {seed}",
+                "=" * 56,
+                env.render(),
+                "",
+                "Recent actions:",
+            ]
             for past_name, past_r in history[-5:]:
                 marker = ">>> " if (past_name, past_r) == history[-1] else "    "
-                print(f"  {marker}{past_name:40s}  r={past_r:+.2f}")
+                frame.append(f"  {marker}{past_name:40s}  r={past_r:+.2f}")
+            frame += [
+                "",
+                f"Top Q: {top_q}",
+                "",
+                f"Step: {step:4d}  |  Total reward: {total_reward:+7.1f}  |  Floor: {info['floor']+1}/5",
+            ]
 
-            print()
-            print(f"Top Q-values: {top_q}")
-            print()
-            print(f"Step: {step:4d}  |  Total reward: {total_reward:+7.1f}  |  Floor: {info['floor']+1}/5")
-
+            prev_lines = _overwrite(frame, prev_lines)
             obs = next_obs
             time.sleep(delay)
 
             if terminated or truncated:
-                clear()
-                print("=" * 56)
-                print(f"  EPISODE OVER — {'WON! 🏆' if env._won else 'Died' if env._hp <= 0 else 'Timed out'}")
-                print("=" * 56)
-                print(env.render())
-                print()
-                print(f"Steps:        {step}")
-                print(f"Floors reached: {info['floor']+1} / 5")
-                print(f"Total reward: {total_reward:+.1f}")
-                print()
-
-                # Action breakdown
                 from collections import Counter
                 counts = Counter(n for n, _ in history)
-                print("Action breakdown:")
+                end_frame = [
+                    "=" * 56,
+                    f"  EPISODE OVER -- {'WON!' if env._won else 'Died' if env._hp <= 0 else 'Timed out'}",
+                    "=" * 56,
+                    env.render(),
+                    "",
+                    f"Steps:          {step}",
+                    f"Floors reached: {info['floor']+1} / 5",
+                    f"Total reward:   {total_reward:+.1f}",
+                    "",
+                    "Action breakdown:",
+                ]
                 for aname, count in counts.most_common(8):
                     bar = "#" * (count // 2)
-                    print(f"  {aname:40s} {count:3d}x  {bar}")
+                    end_frame.append(f"  {aname:40s} {count:3d}x  {bar}")
+                _overwrite(end_frame, prev_lines)
                 break
 
     except KeyboardInterrupt:
