@@ -12,3 +12,4 @@ runs/
 checkpoints/
 *.pt
 *.pth
+checkpoints/
