@@ -175,7 +175,7 @@ class TowerEnv(gym.Env):
         assert self.action_space.contains(action), f"Invalid action {action}"
 
         self._steps += 1
-        reward = -0.1  # small time penalty every step — encourages efficiency
+        reward = -0.01  # small time penalty every step — encourages efficiency
 
         if action < N_MOVE_ACTIONS:
             reward += self._act_move(DIRECTIONS[action])
@@ -242,11 +242,8 @@ class TowerEnv(gym.Env):
         dx, dy = DELTA[direction]
         nx, ny = x + dx, y + dy
 
-        if not self._floor.in_bounds(nx, ny):
-            return -0.5  # walked into outer wall
-
-        if state == PassageState.WALL:
-            return -0.5
+        if not self._floor.in_bounds(nx, ny) or state == PassageState.WALL:
+            return 0.0  # masked out — shouldn't be selected
 
         if state == PassageState.LOCKED:
             if self._inv_pot[Potion.KEY_ESSENCE] > 0:
@@ -254,7 +251,7 @@ class TowerEnv(gym.Env):
                 room.open_passage(direction)
                 self._floor.room_at(nx, ny).open_passage(OPPOSITE[direction])
             else:
-                return -0.5  # locked and no key
+                return 0.0  # masked out
 
         if state == PassageState.BARRIER:
             if self._inv_pot[Potion.EXPLOSIVE] > 0:
@@ -262,7 +259,7 @@ class TowerEnv(gym.Env):
                 room.open_passage(direction)
                 self._floor.room_at(nx, ny).open_passage(OPPOSITE[direction])
             else:
-                return -0.5
+                return 0.0  # masked out
 
         # Move
         self._agent_pos = (nx, ny)
@@ -291,7 +288,7 @@ class TowerEnv(gym.Env):
         x, y = self._agent_pos
         room = self._floor.room_at(x, y)
         if not room.ingredients:
-            return -0.2  # wasted action
+            return 0.0  # masked out
         reward = len(room.ingredients) * 1.0  # +1 per ingredient collected
         for ing in room.ingredients:
             self._inv_ing[ing] += 1
@@ -304,7 +301,7 @@ class TowerEnv(gym.Env):
         room  = self._floor.room_at(x, y)
         enemy = next((e for e in room.enemies if e.is_alive), None)
         if enemy is None:
-            return -0.2  # no enemy here
+            return 0.0  # masked out
 
         # Strength potion doubles attack for one hit
         atk = self.attack
@@ -337,10 +334,10 @@ class TowerEnv(gym.Env):
           HP is low? Separate actions let the agent learn this.
         """
         if recipe_idx >= len(RECIPE_LIST):
-            return -0.5
+            return 0.0
         a, b, potion = RECIPE_LIST[recipe_idx]
         if self._inv_ing[a] < 1 or self._inv_ing[b] < 1:
-            return -0.5  # missing ingredients
+            return 0.0  # masked out
         self._inv_ing[a] -= 1
         self._inv_ing[b] -= 1
         self._inv_pot[potion] += 1
@@ -349,7 +346,7 @@ class TowerEnv(gym.Env):
     def _act_use_potion(self, potion: Potion) -> float:
         """Use a potion from inventory. Each type has a different effect."""
         if self._inv_pot[potion] < 1:
-            return -0.5  # don't have it
+            return 0.0  # masked out
 
         self._inv_pot[potion] -= 1
 
@@ -362,7 +359,7 @@ class TowerEnv(gym.Env):
             if self._poisoned:
                 self._poisoned = False
                 return +1.0
-            return -0.3  # wasted — not poisoned
+            return 0.0  # masked out — not poisoned
 
         if potion == Potion.FLOOR_SKIP:
             return self._climb_stairs()
@@ -370,7 +367,70 @@ class TowerEnv(gym.Env):
         # STRENGTH / INVISIBILITY / EXPLOSIVE / KEY_ESSENCE are consumed
         # when used contextually (attack / move), not here directly.
         # Using them here is a no-op but we still consumed the potion.
-        return -0.3
+        return 0.0  # masked out
+
+    # ------------------------------------------------------------------
+    # Action masking
+    # ------------------------------------------------------------------
+    # WHY action masking?
+    #   Without it, the agent wastes steps on impossible actions (craft a
+    #   potion it has no ingredients for, move through a wall) and learns
+    #   to avoid them via negative reward — which distorts the Q-values.
+    #   With masking, invalid Q-values are set to -inf before the argmax,
+    #   so the agent never selects them. Every step is a meaningful choice.
+
+    def valid_action_mask(self) -> np.ndarray:
+        """Return a boolean array of length N_ACTIONS: True = action is valid now."""
+        mask = np.zeros(N_ACTIONS, dtype=bool)
+        x, y = self._agent_pos
+        room = self._floor.room_at(x, y)
+
+        # Movement: valid if passage is open, or locked/barrier with the right potion
+        for i, d in enumerate(DIRECTIONS):
+            state = room.passages[d]
+            dx, dy = DELTA[d]
+            if not self._floor.in_bounds(x + dx, y + dy):
+                continue
+            if state == PassageState.OPEN:
+                mask[i] = True
+            elif state == PassageState.LOCKED and self._inv_pot[Potion.KEY_ESSENCE] > 0:
+                mask[i] = True
+            elif state == PassageState.BARRIER and self._inv_pot[Potion.EXPLOSIVE] > 0:
+                mask[i] = True
+
+        # Pickup: valid if room has ingredients
+        mask[ACTION_PICKUP] = bool(room.ingredients)
+
+        # Attack: valid if room has a living enemy
+        mask[ACTION_ATTACK] = any(e.is_alive for e in room.enemies)
+
+        # Craft: valid if we have both ingredients for that recipe
+        for i, (a, b, _) in enumerate(RECIPE_LIST):
+            mask[ACTION_CRAFT_BASE + i] = (
+                self._inv_ing[a] >= 1 and self._inv_ing[b] >= 1
+            )
+
+        # Use potion: valid if we have it (and it's contextually useful)
+        for i, potion in enumerate(Potion):
+            if self._inv_pot[potion] < 1:
+                continue
+            if potion == Potion.HEALING:
+                mask[ACTION_USE_BASE + i] = self._hp < self.max_hp
+            elif potion == Potion.ANTIDOTE:
+                mask[ACTION_USE_BASE + i] = self._poisoned
+            elif potion == Potion.FLOOR_SKIP:
+                mask[ACTION_USE_BASE + i] = True
+            # STRENGTH, INVISIBILITY used contextually via attack/move — skip here
+
+        # Safety: always allow at least one action (move to least-bad direction)
+        if not mask.any():
+            for i in range(N_MOVE_ACTIONS):
+                dx, dy = DELTA[DIRECTIONS[i]]
+                if self._floor.in_bounds(x + dx, y + dy):
+                    mask[i] = True
+                    break
+
+        return mask
 
     # ------------------------------------------------------------------
     # Observation encoder

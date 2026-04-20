@@ -102,7 +102,8 @@ def train(
         ep_learns   = 0
 
         for _ in range(max_steps):
-            action                              = agent.select_action(obs)
+            mask                                = env.valid_action_mask()
+            action                              = agent.select_action(obs, mask)
             next_obs, reward, term, trunc, info = env.step(action)
             done                                = term or trunc
 

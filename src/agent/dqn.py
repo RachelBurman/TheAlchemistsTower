@@ -174,18 +174,30 @@ class DQNAgent:
     # Action selection
     # ------------------------------------------------------------------
 
-    def select_action(self, obs: np.ndarray) -> int:
+    def select_action(
+        self,
+        obs:  np.ndarray,
+        mask: Optional[np.ndarray] = None,
+    ) -> int:
         """
-        Epsilon-greedy: random with prob epsilon, else argmax Q.
-        Always returns a Python int (not a tensor) — the env expects that.
+        Epsilon-greedy with optional action mask.
+        When a mask is provided:
+          - Explore: pick uniformly from valid actions only
+          - Exploit: set invalid Q-values to -inf, then argmax
         """
+        valid = np.where(mask)[0] if mask is not None else np.arange(self.n_actions)
+
         if random.random() < self.epsilon:
-            return random.randrange(self.n_actions)
+            return int(random.choice(valid))
 
         with torch.no_grad():
             obs_t  = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
-            q_vals = self.q_net(obs_t)           # shape: (1, n_actions)
-            return int(q_vals.argmax(dim=1).item())
+            q_vals = self.q_net(obs_t).squeeze(0)  # shape: (n_actions,)
+            if mask is not None:
+                inf_mask = torch.full_like(q_vals, float("-inf"))
+                inf_mask[torch.tensor(valid)] = q_vals[torch.tensor(valid)]
+                q_vals = inf_mask
+            return int(q_vals.argmax().item())
 
     # ------------------------------------------------------------------
     # Experience storage
