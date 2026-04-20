@@ -270,10 +270,11 @@ class TowerEnv(gym.Env):
         # First visit: exploration bonus. Repeat visits: growing penalty.
         # The penalty scales with visit count so oscillation becomes
         # increasingly costly — the agent can't exploit a fixed penalty.
-        if n == 1:
-            reward = +0.5
-        else:
-            reward = -0.1 * (n - 1)
+        # First visit: exploration bonus.
+        # Revisits: no reward, no penalty.
+        # The agent still prefers unvisited rooms (+0.5 > 0.0) without
+        # any risk of penalty explosion during early random exploration.
+        reward = +0.5 if n == 1 else 0.0
 
         if new_room.has_stairs:
             reward += self._climb_stairs()
