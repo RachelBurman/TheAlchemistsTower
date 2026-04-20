@@ -92,8 +92,8 @@ class Floor:
         Result: a spanning tree of the grid — every room connected,
         no loops, exactly one path between any two rooms.
 
-        We track "visited" with a local set here, not room.visited,
-        because room.visited means "the agent has been here."
+        We track "visited" with a local set here, not room.visit_count,
+        because room.visit_count tracks agent visits during an episode.
         """
         visited: set[tuple[int, int]] = set()
         stack:   list[tuple[int, int]] = []

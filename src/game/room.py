@@ -68,10 +68,10 @@ class Room:
         default_factory=lambda: {d: PassageState.WALL for d in Direction}
     )
 
-    ingredients: list[Ingredient] = field(default_factory=list)
-    enemies:     list[Enemy]      = field(default_factory=list)
-    has_stairs:  bool             = False
-    visited:     bool             = False  # has the agent been here?
+    ingredients:  list[Ingredient] = field(default_factory=list)
+    enemies:      list[Enemy]      = field(default_factory=list)
+    has_stairs:   bool             = False
+    visit_count:  int              = 0  # how many times agent entered this episode
 
     def can_enter_from(self, direction: Direction) -> bool:
         """True if the passage from `direction` side is open."""

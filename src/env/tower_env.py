@@ -157,7 +157,7 @@ class TowerEnv(gym.Env):
         seed = int(self._episode_seed) + floor_idx * 1000
         self._floor     = Floor(self.floor_width, self.floor_height, floor_idx + 1, seed)
         self._agent_pos = self._floor.start_pos
-        self._floor.room_at(*self._agent_pos).visited = True
+        self._floor.room_at(*self._agent_pos).visit_count = 1
 
     # ------------------------------------------------------------------
     # step()
@@ -263,11 +263,17 @@ class TowerEnv(gym.Env):
 
         # Move
         self._agent_pos = (nx, ny)
-        new_room  = self._floor.room_at(nx, ny)
-        is_new    = not new_room.visited
-        new_room.visited = True
+        new_room = self._floor.room_at(nx, ny)
+        new_room.visit_count += 1
+        n = new_room.visit_count
 
-        reward = 0.5 if is_new else 0.0  # exploration bonus for first visit
+        # First visit: exploration bonus. Repeat visits: growing penalty.
+        # The penalty scales with visit count so oscillation becomes
+        # increasingly costly — the agent can't exploit a fixed penalty.
+        if n == 1:
+            reward = +0.5
+        else:
+            reward = -0.1 * (n - 1)
 
         if new_room.has_stairs:
             reward += self._climb_stairs()
